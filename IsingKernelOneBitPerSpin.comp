@@ -1,0 +1,132 @@
+#version 460
+
+layout (binding = 0) buffer SpinBatchesSSBO
+{
+	uint spinBatches[];																				// An array of length 'isingN' with each element representing a spin
+};
+
+layout (binding = 1) buffer RandomSSBO
+{
+	uint randomNumbers[];																				// An array of random numbers
+};
+
+layout (binding = 2) writeonly buffer SpinSumSSBO
+{
+	int spinSum;																						// Initialized to isingN (corresponding to all spins being +1)
+};
+
+layout (binding = 3) uniform UBO
+{
+	uint transitionProbability4;																			// The transition probability if deltaE = +4. Constant for constant Beta
+	uint transitionProbability8;																			// The transition probability if deltaE = +8. Constant for constant Beta
+	uint isingL;																							// The width and height of the ising grid
+	uint isingN;																							// The total number of spins
+} ubo;
+
+layout (push_constant) uniform constants
+{
+	uint phase;																								// Used to sweep in a checkerboard-like pattern
+} pushConstants;
+
+layout (constant_id = 0) const uint localWorkgroupSizeInX = 1;												// The value of localWorkgroupSize_x is passed as a specialization constant
+
+layout (local_size_x_id = 0) in;
+
+// https://www.jstatsoft.org/article/view/v008i14
+uint XORShift(uint rngState)
+{    
+    rngState ^= (rngState << 13);
+    rngState ^= (rngState >> 17);
+    rngState ^= (rngState << 5);
+    return rngState;
+}
+
+void main()
+{
+	// Get the row number of the spin as if it was a 2D array of spins. We multiply by 2 because of the checkerboard pattern sweep
+	const uint rowNumber = (2 * gl_GlobalInvocationID.x) / ubo.isingL;
+	
+	// Get the index of the spin as if we had a 1D array of spins.
+	// This is the expression for even grid lengths:
+	uint spinIndex = (2 * gl_GlobalInvocationID.x) + ((rowNumber + pushConstants.phase) % 2);
+
+	// If the grid length is odd we change the value
+	if (ubo.isingL % 2 == 1)
+	{
+		spinIndex = 2 * gl_GlobalInvocationID.x + pushConstants.phase;
+	}
+
+	// Get the column number of the spin
+	const uint columnNumber = spinIndex % ubo.isingL;
+
+	if (spinIndex < ubo.isingN)
+	{
+		// The spins are set to +1 by default and changed to -1 below if a spin is -1
+		int centerSpinSpin = 1, rightSpinSpin = 1, leftSpinSpin = 1;
+		int aboveSpinSpin = 1, belowSpinSpin = 1;
+
+		const uint centerSpinSpinBatch = spinIndex / 32;
+		const uint centerSpinSpinBatchBit = spinIndex % 32;
+		if ((spinBatches[centerSpinSpinBatch] & (1 << (31 -  centerSpinSpinBatchBit))) == 0)
+		{
+			centerSpinSpin = -1;
+		}
+
+		const uint rightSpinSpinBatch = (((columnNumber + 1) % ubo.isingL) + rowNumber * ubo.isingL) / 32;
+		const uint rightSpinSpinBatchBit = (((columnNumber + 1) % ubo.isingL) + rowNumber * ubo.isingL) % 32;
+		if ((spinBatches[rightSpinSpinBatch] & (1 << (31 -  rightSpinSpinBatchBit))) == 0)
+		{
+			rightSpinSpin = -1;
+		}
+
+		const uint leftSpinSpinBatch = (((columnNumber + ubo.isingL - 1) % ubo.isingL) + rowNumber * ubo.isingL) / 32;
+		const uint leftSpinSpinBatchBit = (((columnNumber + ubo.isingL - 1) % ubo.isingL) + rowNumber * ubo.isingL) % 32;
+		if ((spinBatches[leftSpinSpinBatch] & (1 << (31 -  leftSpinSpinBatchBit))) == 0)
+		{
+			leftSpinSpin = -1;
+		}
+
+		const uint aboveSpinSpinBatch = (((rowNumber + ubo.isingL - 1) % ubo.isingL) * ubo.isingL + columnNumber) / 32;
+		const uint aboveSpinSpinBatchBit = (((rowNumber + ubo.isingL - 1) % ubo.isingL) * ubo.isingL + columnNumber) % 32;
+		if ((spinBatches[aboveSpinSpinBatch] & (1 << (31 -  aboveSpinSpinBatchBit))) == 0)
+		{
+			aboveSpinSpin = -1;
+		}
+
+		const uint belowSpinSpinBatch = (((rowNumber + 1) % ubo.isingL) * ubo.isingL + columnNumber) / 32;
+		const uint belowSpinSpinBatchBit = (((rowNumber + 1) % ubo.isingL) * ubo.isingL + columnNumber) % 32;
+		if ((spinBatches[belowSpinSpinBatch] & (1 << (31 -  belowSpinSpinBatchBit))) == 0)
+		{
+			belowSpinSpin = -1;
+		}
+
+		const int deltaE = 2 * centerSpinSpin * (rightSpinSpin + leftSpinSpin
+		+ aboveSpinSpin + belowSpinSpin);																							// The change in energy if the spin is flipped
+
+		// Here the metropolis algorithm is used
+		if (deltaE <= 0)
+		{
+			if (centerSpinSpin == 1) atomicAdd(spinBatches[centerSpinSpinBatch], -1 * (1 << (31 -  centerSpinSpinBatchBit)));		// This accomplishes flipping the spin
+			else atomicAdd(spinBatches[centerSpinSpinBatch], (1 << (31 -  centerSpinSpinBatchBit)));								// This accomplishes flipping the spin
+			atomicAdd(spinSum, -2 * centerSpinSpin);																				// Change the spin sum (magnetization)
+		}
+		else
+		{
+			uint randomNumber = randomNumbers[spinIndex];																			// Get the current random number.
+			randomNumbers[spinIndex] = XORShift(randomNumber);																		// Prepare the next random number for the next invocation
+
+			if (deltaE == 4 && (randomNumber % 100000000) < ubo.transitionProbability4)
+			{
+				if (centerSpinSpin == 1) atomicAdd(spinBatches[centerSpinSpinBatch], -1 * (1 << (31 -  centerSpinSpinBatchBit)));	// This accomplishes flipping the spin
+				else atomicAdd(spinBatches[centerSpinSpinBatch], (1 << (31 -  centerSpinSpinBatchBit)));							// This accomplishes flipping the spin
+				atomicAdd(spinSum, -2 * centerSpinSpin);
+			}
+			else if (deltaE == 8 && (randomNumber % 100000000)  < ubo.transitionProbability8)
+			{
+				if (centerSpinSpin == 1) atomicAdd(spinBatches[centerSpinSpinBatch], -1 * (1 << (31 -  centerSpinSpinBatchBit)));	// This accomplishes flipping the spin
+				else atomicAdd(spinBatches[centerSpinSpinBatch], (1 << (31 -  centerSpinSpinBatchBit)));							// This accomplishes flipping the spin
+				atomicAdd(spinSum, -2 * centerSpinSpin);
+			}
+		}
+	}
+}				

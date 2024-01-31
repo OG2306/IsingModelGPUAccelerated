@@ -1,0 +1,94 @@
+#version 460
+
+layout (binding = 0) buffer SpinsSSBO
+{
+	int spins[];																							// An array of length 'isingN' with each element representing a spin
+};
+
+layout (binding = 1) buffer RandomSSBO
+{
+	uint randomNumbers[];																					// An array of random numbers
+};
+
+layout (binding = 2) writeonly buffer SpinSumSSBO
+{
+	int spinSum;																							// Initialized to isingN (corresponding to all spins being +1)
+};
+
+layout (binding = 3) uniform UBO
+{
+	uint transitionProbability4;																			// The transition probability if deltaE = +4. Constant for constant Beta
+	uint transitionProbability8;																			// The transition probability if deltaE = +8. Constant for constant Beta
+	uint isingL;																							// The width and height of the ising grid
+	uint isingN;																							// The total number of spins
+} ubo;
+
+layout (push_constant) uniform constants
+{
+	uint phase;																								// Used to sweep in a checkerboard-like pattern
+} pushConstants;
+
+layout (constant_id = 0) const uint localWorkgroupSizeInX = 1;												// The value of localWorkgroupSize_x is passed as a specialization constant
+
+layout (local_size_x_id = 0) in;
+
+// https://www.jstatsoft.org/article/view/v008i14
+uint XORShift(uint rngState)
+{    
+    rngState ^= (rngState << 13);
+    rngState ^= (rngState >> 17);    
+    rngState ^= (rngState << 5);
+    return rngState;
+}
+
+void main()
+{
+	// Get the row of the spin as if it was a 2D array, integer division
+	const uint row = (2 * gl_GlobalInvocationID.x) / ubo.isingL;
+	
+	// Get the linear index of the spin
+	// This is the expression for even grid lengths:
+	uint linearIndex = (2 * gl_GlobalInvocationID.x) + ((row + pushConstants.phase) % 2);
+
+	// If the grid length is odd we change the value
+	if (ubo.isingL % 2 == 1)
+	{
+		linearIndex = 2 * gl_GlobalInvocationID.x + pushConstants.phase;
+	}
+
+	// Get the column number of the spin
+	const uint column = linearIndex % ubo.isingL;
+
+	if (linearIndex < ubo.isingN)
+	{
+		// Calculate the change in energy upon flipping the spin
+		const int deltaE = 2 * spins[linearIndex] *
+		(spins[((column + 1) % ubo.isingL) + row * ubo.isingL] +
+		spins[((column + (ubo.isingL - 1)) % ubo.isingL) + row * ubo.isingL] +
+		spins[((row + (ubo.isingL - 1)) % ubo.isingL) * ubo.isingL + column] +
+		spins[((row + 1) % ubo.isingL) * ubo.isingL + column]);
+
+		// Use the Metropolis algorithm
+		if (deltaE <= 0)
+		{
+			spins[linearIndex] *= -1;
+			atomicAdd(spinSum, 2 * spins[linearIndex]);
+		}
+		else
+		{
+			uint randomNumber = randomNumbers[linearIndex];
+			randomNumbers[linearIndex] = XORShift(randomNumber);
+			
+			if (deltaE == 4 && (randomNumber % 100000000) < ubo.transitionProbability4)
+			{
+				spins[linearIndex] *= -1;
+				atomicAdd(spinSum, 2 * spins[linearIndex]);
+			}
+			else if (deltaE == 8 && (randomNumber % 100000000)  < ubo.transitionProbability8)
+			{
+				spins[linearIndex] *= -1;
+				atomicAdd(spinSum, 2 * spins[linearIndex]);
+			}
+		}
+	}
+}

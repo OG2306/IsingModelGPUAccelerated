@@ -1,0 +1,112 @@
+#version 460
+
+layout (binding = 0) buffer xySSBO
+{
+	float spinAngles[];
+};
+
+layout (binding = 1) buffer RandomSSBO
+{
+	uint randomNumbers[];
+};
+
+layout (binding = 2) uniform UBO
+{
+	float minusBeta;
+	uint xyL;
+	uint xyN;
+} ubo;
+
+layout (binding = 3) writeonly buffer SpinSumXSSBO
+{
+	int spinSumX;
+};
+
+layout (binding = 4) writeonly buffer SpinSumYSSBO
+{
+	int spinSumY;
+};
+
+layout (push_constant) uniform constants
+{
+	uint phase;																								// Used to sweep in a checkerboard-like pattern
+} pushConstants;
+
+layout (constant_id = 0) const uint localWorkgroupSizeInX = 1;
+
+layout (local_size_x_id = 0) in;
+
+// https://www.jstatsoft.org/article/view/v008i14
+uint XORShift(uint rngState)
+{    
+    rngState ^= (rngState << 13);
+    rngState ^= (rngState >> 17);    
+    rngState ^= (rngState << 5);
+    return rngState;
+}
+
+void main()
+{
+	const uint rowNumber = (2 * gl_GlobalInvocationID.x) / ubo.xyL;
+	
+	uint spinIndex = (2 * gl_GlobalInvocationID.x) + ((rowNumber + pushConstants.phase) % 2);
+
+	if (ubo.xyL % 2 == 1)
+	{
+		spinIndex = 2 * gl_GlobalInvocationID.x + pushConstants.phase;
+	}
+	
+	const uint columnNumber = spinIndex % ubo.xyL;
+
+	if (spinIndex < ubo.xyN)
+	{
+		uint indexOfSpinToTheRight = ((columnNumber + 1) % ubo.xyL) + rowNumber * ubo.xyL;
+		uint indexOfSpinToTheLeft = ((columnNumber + (ubo.xyL - 1)) % ubo.xyL) + rowNumber * ubo.xyL;
+		uint indexOfSpinAbove = ((rowNumber + (ubo.xyL - 1)) % ubo.xyL) * ubo.xyL + columnNumber;
+		uint indexOfSpinBelow = ((rowNumber + 1) % ubo.xyL) * ubo.xyL + columnNumber;
+
+		float centerSpinAngle = spinAngles[spinIndex];
+		float leftSpinAngle = spinAngles[indexOfSpinToTheLeft];
+		float rightSpinAngle = spinAngles[indexOfSpinToTheRight];
+		float aboveSpinAngle = spinAngles[indexOfSpinAbove];
+		float belowSpinAngle = spinAngles[indexOfSpinBelow];
+
+		vec2 neighborSpinSum = vec2(cos(leftSpinAngle), sin(leftSpinAngle))
+		+ vec2(cos(rightSpinAngle), sin(rightSpinAngle))
+		+ vec2(cos(aboveSpinAngle), sin(aboveSpinAngle))
+		+ vec2(cos(belowSpinAngle), sin(belowSpinAngle));
+		
+		uint randomNumber = randomNumbers[gl_GlobalInvocationID.x];
+		float randomAngle = (randomNumber % 62831853) / 10000000.0;											// 2*pi * 10^7 = 62831853
+		randomNumbers[gl_GlobalInvocationID.x] = XORShift(randomNumber);
+
+		vec2 randomSpin = vec2(cos(randomAngle), sin(randomAngle));
+		vec2 centerSpin = vec2(cos(centerSpinAngle), sin(centerSpinAngle));
+		vec2 spinDifference = (randomSpin - centerSpin);
+
+		float deltaE = -1.0 * dot(spinDifference, neighborSpinSum);
+
+		if (deltaE <= 0)
+		{
+			spinAngles[spinIndex] = randomAngle;
+
+			atomicAdd(spinSumX, int(spinDifference.x * 100000));
+			atomicAdd(spinSumY, int(spinDifference.y * 100000));
+		}
+
+		else
+		{
+			uint transitionProbability = uint(exp(ubo.minusBeta * deltaE) * 1000000);
+			randomNumber = randomNumbers[gl_GlobalInvocationID.x];
+			randomNumbers[gl_GlobalInvocationID.x] = XORShift(randomNumber);
+
+			if (randomNumber % 1000000 < transitionProbability)
+			{
+				spinAngles[spinIndex] = randomAngle;
+
+				atomicAdd(spinSumX, int(spinDifference.x * 100000));
+				atomicAdd(spinSumY, int(spinDifference.y * 100000));
+			}
+		}
+	}
+}
