@@ -1,0 +1,27 @@
+---Ising parameters---
+Grid length: 80
+Start beta: 0.5
+End beta: 0.35
+Beta decrement: 0.01
+Number of sweeps per temperature: 1000000
+Number of sweeps to wait for every temperature before spin sum sampling starts: 1000
+Sweeps per spin sum sample after the wait: 2
+Ran on: GPU
+COMPUTATION TIME (seconds): 206.513
+
+Beta;Binder Cumulant
+0.5;0.666473
+0.49;0.666382
+0.48;0.666218
+0.47;0.665857
+0.46;0.664762
+0.45;0.659737
+0.44;0.592346
+0.43;0.303491
+0.42;0.0943545
+0.41;0.0404603
+0.4;0.028473
+0.39;0.0199059
+0.38;0.0113973
+0.37;0.0160172
+0.36;-0.000558389

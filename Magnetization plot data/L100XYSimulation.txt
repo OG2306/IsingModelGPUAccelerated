@@ -1,0 +1,41 @@
+---XY parameters---
+Grid length: 100
+Start beta: 1.6
+End beta: 0.15
+Beta decrement: 0.05
+Number of sweeps per temperature: 200000
+Number of sweeps to wait for every temperature before spin sum sampling starts: 5000
+Sweeps per spin sum sample after the wait: 2
+Ran on: GPU
+COMPUTATION TIME (seconds): 80.6308
+
+Beta;Magnetization
+1.6;7769.48
+1.55;7663.49
+1.5;7612.34
+1.45;7500.29
+1.4;7421.89
+1.35;7298.5
+1.3;7171.22
+1.25;7024.16
+1.2;6855.15
+1.15;6634.05
+1.1;6391.75
+1.05;6073.34
+1;5567.62
+0.95;4761.88
+0.9;3449.99
+0.85;2083.51
+0.8;1209.79
+0.75;784.329
+0.7;532.36
+0.65;374.816
+0.6;280.286
+0.55;216.749
+0.5;175.533
+0.45;142.987
+0.4;116.962
+0.35;102.99
+0.3;87.2457
+0.25;75.0296
+0.2;65.875
